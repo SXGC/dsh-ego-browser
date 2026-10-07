@@ -117,6 +117,27 @@ export function profilesFromLocalState(localStateJson: string, userDataDir: stri
   }
 }
 
+/** A detected system browser and its profiles, for the settings card's source/profile pickers. */
+export interface LoginSource {
+  id: SystemBrowser['id']
+  label: string
+  profiles: { dirName: string; name: string }[]
+}
+
+/**
+ * Detected system browsers (detectSystemBrowsers order) with the profiles
+ * listed in their Local State. Reads Local State only — never launches a
+ * browser or touches cookies. A browser whose Local State cannot be read
+ * gets the single `Default` profile.
+ */
+export async function listLoginSources(browsers: SystemBrowser[] = detectSystemBrowsers()): Promise<LoginSource[]> {
+  return Promise.all(browsers.map(async (b) => {
+    const localState = await readFile(join(b.userDataDir, 'Local State'), 'utf8').catch(() => '')
+    const profiles = profilesFromLocalState(localState, b.userDataDir).map(({ dirName, name }) => ({ dirName, name }))
+    return { id: b.id, label: b.label, profiles }
+  }))
+}
+
 // ── cookie filtering / conversion (pure) ────────────────────────────────────
 
 /** Domain filter: "bilibili.com" matches ".bilibili.com" and any subdomain. */

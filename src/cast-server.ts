@@ -17,7 +17,7 @@ import { request, type ClientRequest, type IncomingMessage, type ServerResponse 
 import type { EgoContext, RegisterRouteOptions, ResolvedConfig, WebServerLike } from './types.ts'
 import type { SettingsBridge } from './settings.ts'
 import type { FfmpegInstallationManager, FfmpegStatus } from './ffmpeg-installation.ts'
-import type { LoginImportOptions, LoginImportReport } from './login-import.ts'
+import type { LoginImportOptions, LoginImportReport, LoginSource } from './login-import.ts'
 
 const WORKER_BIN = fileURLToPath(new URL('../bin/ego-cast-worker.mjs', import.meta.url))
 
@@ -28,6 +28,7 @@ export const EGO_CLOSE_ROUTE = '/api/ego/close'
 export const EGO_FLUSH_ROUTE = '/api/ego/flush'
 export const EGO_RAISE_ROUTE = '/api/ego/raise'
 export const EGO_LOGIN_IMPORT_ROUTE = '/api/ego/login-import'
+export const EGO_LOGIN_SOURCES_ROUTE = '/api/ego/login-import/sources'
 export const EGO_INPUT_ROUTE = '/api/ego/input'
 export const EGO_WATCH_START_ROUTE = '/api/ego/watch/start'
 export const EGO_WATCH_SWITCH_ROUTE = '/api/ego/watch/switch'
@@ -508,6 +509,7 @@ export function initCastServer(
   ffmpegManager: FfmpegInstallationManager | null,
   openAgentWindow: () => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: 'raise not supported by this host build' }),
   loginImport: (opts: LoginImportOptions) => Promise<LoginImportReport> = async () => ({ ok: false, error: 'login import not supported by this host build' }),
+  listSources: () => Promise<LoginSource[]> = async () => [],
 ): void {
   const ensureWorker = makeEnsureWorker(ctx, cfg, ffmpegManager)
   const pushConfig = makePushConfig(ensureWorker, ffmpegManager)
@@ -738,6 +740,21 @@ export function initCastServer(
     },
   })
 
+  // GET /api/ego/login-import/sources — detected system browsers and their
+  // profiles for the settings card's pickers. Reads Local State only.
+  const disposeLoginSources = server.register({
+    kind: 'exact',
+    path: EGO_LOGIN_SOURCES_ROUTE,
+    handler: async (_req: unknown, resRaw: unknown) => {
+      const res = resRaw as ServerResponse
+      try {
+        return sendJson(res, 200, { ok: true, sources: await listSources() })
+      } catch (err) {
+        return sendJson(res, 500, { ok: false, error: String((err as Error)?.message || err) })
+      }
+    },
+  })
+
   const disposeHealth = server.register({
     kind: 'exact',
     path: EGO_HEALTH_ROUTE,
@@ -813,6 +830,7 @@ export function initCastServer(
     try { disposeFlush() } catch { /* ignore */ }
     try { disposeRaise() } catch { /* ignore */ }
     try { disposeLoginImport() } catch { /* ignore */ }
+    try { disposeLoginSources() } catch { /* ignore */ }
     try { disposeHealth() } catch { /* ignore */ }
     for (const dispose of watchRoutes) try { dispose() } catch { /* ignore */ }
     try { disposeWatchStatus() } catch { /* ignore */ }

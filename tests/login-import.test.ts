@@ -7,7 +7,11 @@ import {
   toCookieParam,
   parseDevToolsActivePort,
   resolveEgoStateDir,
+  listLoginSources,
 } from "../src/login-import.ts";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 describe("chromiumCandidates / detectSystemBrowsers", () => {
   it("builds Windows candidate paths from env", () => {
@@ -136,5 +140,23 @@ describe("resolveEgoStateDir", () => {
   it("uses XDG_STATE_HOME / ~/.local/state on POSIX", () => {
     expect(resolveEgoStateDir({ HOME: "/h" }, "linux")).toBe("/h/.local/state/ego-lite-linux");
     expect(resolveEgoStateDir({ XDG_STATE_HOME: "/x", HOME: "/h" }, "linux")).toBe("/x/ego-lite-linux");
+  });
+});
+
+describe("listLoginSources", () => {
+  it("lists each browser's Local State profiles without dir, and Default when Local State is unreadable", async () => {
+    const withState = mkdtempSync(join(tmpdir(), "ego-sources-"));
+    writeFileSync(join(withState, "Local State"), JSON.stringify({
+      profile: { info_cache: { Default: { name: "Personal" }, "Profile 1": { name: "Work" } } },
+    }));
+    const missing = join(withState, "no-such-dir");
+    const sources = await listLoginSources([
+      { id: "chrome", label: "Google Chrome", exePath: "/x/chrome", userDataDir: withState },
+      { id: "edge", label: "Microsoft Edge", exePath: "/x/edge", userDataDir: missing },
+    ]);
+    expect(sources).toEqual([
+      { id: "chrome", label: "Google Chrome", profiles: [{ dirName: "Default", name: "Personal" }, { dirName: "Profile 1", name: "Work" }] },
+      { id: "edge", label: "Microsoft Edge", profiles: [{ dirName: "Default", name: "Default" }] },
+    ]);
   });
 });

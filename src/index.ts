@@ -38,7 +38,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { importLoginCookies } from './login-import.ts'
+import { importLoginCookies, listLoginSources } from './login-import.ts'
 import { initCastServer, markEgoToolCall, getLastEgoActivity } from './cast-server.ts'
 import { EGO_HELP_INDEX } from './help.ts'
 import { HUMAN_CHECK_PROBE } from './captcha.ts'
@@ -824,6 +824,7 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
         ffmpegManager,
         () => openAgentWindow(ctx, cfg),
         (opts) => importLoginCookies(opts, { subprocess: ctx.subprocess }),
+        () => listLoginSources(),
       )
     } catch (err) {
       ctx.logger?.warn?.(
