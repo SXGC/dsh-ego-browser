@@ -37,9 +37,9 @@
 
 **侧边栏支持（[dsh-better-sidebar](https://www.npmjs.com/package/dsh-better-sidebar)）**：当宿主安装了 `dsh-better-sidebar`（推荐 ≥ v0.12.2）时，实时观察窗注册为**侧边栏原生 Tab**——「Agent 浏览器」出现在侧边栏「+」菜单中，点击即打开并随侧边栏抽屉固定展示；agent 首次调用 `ego_*` 工具时会自动打开该 Tab（v0.8.5 起按调用会话作用域打开，多会话不再弹错位置）。未安装 `dsh-better-sidebar` 时自动回退为右下角**浮动观察球**（`#dsh-ego-fab`）模式。两种形态共用同一套 SSE 实时推流 / 点击 / 输入 / 下载捕获能力。观察窗还提供一个「弹出窗口」按钮：无头（headless）运行的 agent 浏览器可一键替换为同 Profile 的有头窗口（标签页保留），方便手动接管。
 
-**登录态导入（v0.8.5 新增）**：设置页「从系统浏览器导入登录态」或工具 `ego_login_import`，把你日常 Chrome/Edge/Brave 里的登录 cookie **按域名**复制进 agent 浏览器（真实二进制无头启动 + CDP 透传读取，兼容 Chrome 127+ 的 App-Bound Encryption，不做离线解密；源浏览器运行中可选择优雅关闭后导入，窗口下次启动自动恢复）。cookie 值不出现在任何日志与输出中；导入前自动备份源 cookie 库，异常清空自动还原。配合默认的磁盘持久化 Profile，导入的登录态跨重启永久保留。
+**登录态导入（v0.8.5 新增）**：插件配置页（DSH 0.1.7 为「插件 › dsh-ego-browser › 配置」，≤0.1.6 为「设置 › 插件」卡片）的「从系统浏览器导入登录态」：选择来源浏览器与 profile，先「探测」列出可导入的域名及 cookie 数，勾选后只导入勾选的域名（勾选父域名即包含其子域名）。也可直接调用 `POST /api/ego/login-import`，可选来源与 profile 由 `GET /api/ego/login-import/sources` 列出；`ego_login_import` 已不再作为 Agent 工具注册。它把你日常 Chrome/Edge/Brave 里的登录 cookie **按域名**复制进 agent 浏览器（真实二进制无头启动 + CDP 透传读取，兼容 Chrome 127+ 的 App-Bound Encryption，不做离线解密；源浏览器运行中可选择优雅关闭后导入，窗口下次启动自动恢复）。cookie 值不出现在任何日志与输出中；导入前自动备份源 cookie 库，异常清空自动还原。配合默认的磁盘持久化 Profile，导入的登录态跨重启永久保留。
 
-把 [CitroLabs/ego-lite](https://github.com/CitroLabs/ego-lite)（给 AI Agent 用的 Chromium）接入 DeepSeek Harness：以 **33 个结构化 `ego_*` 工具**驱动浏览器，并配一套**实时观察前端口**——agent 后台操作网页时，你能像看直播一样看到它正在浏览的每个页面，还能直接操作它。
+把 [CitroLabs/ego-lite](https://github.com/CitroLabs/ego-lite)（给 AI Agent 用的 Chromium）接入 DeepSeek Harness：以 **19 个结构化 `ego_*` 工具**驱动浏览器，并配一套**实时观察前端口**——agent 后台操作网页时，你能像看直播一样看到它正在浏览的每个页面，还能直接操作它。
 
 **一点私藏的独特之处（self-observation）**：agent 用的就是这一个 Chromium——连它操作 **DSH 自身**（管理会话、任务看板、调设置）时，观察窗也实时显示、你能随时接手。不只是"看得见 agent 在网页上干活"，连 agent 操作 DSH 界面本身都是全程可见、可掌控的。
 
@@ -53,19 +53,19 @@
 
 | 能力 | ego-browser（本仓库） | 同类插件（Da1dr1em/dsh-ego-browser） |
 |---|---|---|
-| 结构化工具数 | **32 个**，职责单一、可确定性调用 | **3 个**（`run`/`help`/`status`） |
+| 结构化工具数 | **19 个**，页面操作一工具一事，其余按 `action` 分路 | **3 个**（`run`/`help`/`status`） |
 | 实时观察窗（CDP JPEG / FFmpeg H.264 双后端 + 标签条 + 历史抽屉） | ✅ 有 | ❌ 无 |
 | 监控窗鼠标**直接操作**真实浏览器（点击/拖拽/滚动回传 CDP） | ✅ 有 | ❌ 无 |
 | worker 单实例守卫 + 崩溃/重复自愈 | ✅ 有 | ❌ 无 |
-| 下载捕获 `ego_download` / 人机验证检测 `ego_captcha`/`ego_page_info` | ✅ 有 | ❌ 无 |
+| 下载捕获 `ego_download` / 人机验证检测 `ego_snapshot`（`action: info`） | ✅ 有 | ❌ 无 |
 | 平台自适应（Linux/macOS/Windows 自动探测 + root/无头/`--no-sandbox` 兜底） | ✅ 全平台 | 仅 Windows 预览宿主，需手动配 |
-| 登录态落盘持久化 `ego_auth_flush` | ✅ 有 | ⚠️ 仅文档级说明 |
+| 登录态落盘持久化 `ego_space`（`action: flush`） | ✅ 有 | ⚠️ 仅文档级说明 |
 
 **关键差异两条：**
 - **看得到**：别家是"跑完告诉你结果"的黑盒；我们实时推流，你**看着 agent 操作**，卡在验证码/走岔立刻发现。
 - **控得住**：别家只读；我们监控窗**直接驱动**同一个 agent 浏览器，需要时你亲手接管（缩放/拖拽/点击），不必打断 agent 重来。
 
-> 以上对比基于公开可见的可核实事实：本仓库代码（`bin/ego-cast-worker.mjs` 实时推流 + CDP 输入回传、`lib/index.js` 32 个注册工具、`lib/cast-server.js` host 桥接）与同类插件的源码/README。此文档不含对任何他人的贬低——我们只陈述自己多实现并验证了哪些能力。
+> 以上对比基于公开可见的可核实事实：本仓库代码（`bin/ego-cast-worker.mjs` 实时推流 + CDP 输入回传、`lib/index.js` 19 个注册工具、`lib/cast-server.js` host 桥接）与同类插件的源码/README。此文档不含对任何他人的贬低——我们只陈述自己多实现并验证了哪些能力。
 
 **相对 [ego-lite](https://github.com/CitroLabs/ego-lite) 本体，我们多做了这些（都可对照本仓库代码核实）：**
 
@@ -74,7 +74,7 @@
 | **观察窗前端口** | ego-lite 本体是无头 CLI（只有 heredoc 脚本 + 文本输出）；我们在其上加了 **SSE 实时推流 + 标签条 + 历史抽屉 + 监控窗鼠标直操**（`bin/ego-cast-worker.mjs`、`lib/cast-server.js`、`lib/client.js`），让"看"和"控"成为一等能力 |
 | **开箱即用 + 跨平台自足** | `resolveEgoEnv` 自动探测 Chrome/Edge/Brave，内置 `--no-sandbox` wrapper，root / Docker / 无显示器免配置（`lib/index.js`）；不必像官方那样先装一个 GUI 宿主 |
 | **健壮性层** | 冷启动自动重试（只重试 CDP 瞬态，不吞真错）、worker 单实例守卫 + 崩溃自动重启、插件卸载 fire-and-forget 不阻塞宿主退出、前端帧缓存上限（`withWarmupRetry` / `makeEnsureWorker` / `frameCache`） |
-| **运维型工具** | `ego_doctor`（环境体检）、`ego_captcha`（人机验证探测）、`ego_auth_flush`（登录落盘）、`ego_login_import`（系统浏览器登录态导入）、`ego_http`（浏览器上下文请求）等，是原生 CLI helper 没有的一层 |
+| **运维型工具** | `ego_doctor`（环境体检）、`ego_snapshot` 的 `info`（人机验证探测）、`ego_space` 的 `flush`（登录落盘）、设置页的系统浏览器登录态导入、`ego_http`（浏览器上下文请求）等，是原生 CLI helper 没有的一层 |
 | **self-observation** | agent 操作 DSH 自身界面时同样实时可见、可接手 |
 
 > 我们不声称媲美官方 macOS App 的内核级快照或原生多窗口体验；本仓库解决的是"把同一套浏览器能力带进 DSH + Linux/WSL + 看得见"这件事。
@@ -146,18 +146,61 @@ dshx list                                                # 应显示：[on] ego-
 
 无需宿主侧任何配置：`resolveEgoEnv` 自动探测 root / 无显示器并兜底。观察窗 host 路由（`/api/ego/spaces` 等）仅在有 HTTP server 时注册，headless 是安全 no-op。
 
-## 工具清单（32 个，前缀 `ego_`，完整索引见 `ego_help`）
+## 工具清单（19 个，前缀 `ego_`）
 
-| 类别 | 工具 |
+10 个页面操作工具各自独立；其余按 `action` 参数分路，`action` 之外的参数就是所选取值对应操作的参数。传入不属于该取值的参数时调用失败，错误信息列出可用参数。
+
+| 类别 | 工具 | `action` 取值 |
+|---|---|---|
+| 导航 | `ego_navigate`（复用 tab） | — |
+| 页面读取 | `ego_snapshot` | `page`（默认，语义树）、`element`（读取单个元素）、`info`（页面信息与人机验证检测） |
+| 截图 | `ego_screenshot` | — |
+| 页面操作 | `ego_click` `ego_fill` `ego_key` `ego_hover` `ego_select` `ego_check` `ego_drag` `ego_scroll` `ego_upload` `ego_dialog` | — |
+| 等待 | `ego_wait` | `time`、`selector`、`url`、`response`（必填） |
+| 执行/调试 | `ego_eval` | `js`（页面求值）、`cdp`（原始 CDP）、`script`（多步脚本）（必填） |
+| 请求与下载 | `ego_http` `ego_download` | — |
+| 任务空间 | `ego_space` | `open`、`close`、`flush`（登录落盘）（必填） |
+| 诊断 | `ego_doctor` | `full`（默认，环境体检）、`cli`（CLI 状态） |
+
+已移除的旧工具与新调用方式（见 [CHANGELOG.md](CHANGELOG.md) 的 Unreleased 条目）：
+
+| 旧工具 | 新调用 |
 |---|---|
-| 任务空间 | `ego_space_open` `ego_space_close` `ego_status` |
-| 页面读取 | `ego_snapshot`（语义树） `ego_page_info` `ego_read_element` |
-| 导航/等待 | `ego_navigate`（复用 tab） `ego_wait` `ego_wait_for_selector` `ego_wait_for_url` `ego_wait_for_response` |
-| 交互 | `ego_click` `ego_fill` `ego_hover` `ego_drag` `ego_select` `ego_check` `ego_key` `ego_scroll` |
-| 执行/调试 | `ego_js`（页面求值） `ego_cdp`（原始 CDP） `ego_cli`（任意 heredoc） `ego_script`（多步脚本） |
-| 输出 | `ego_screenshot` `ego_download` `ego_upload` |
-| 会话/安全 | `ego_auth_flush`（登录落盘） `ego_captcha` `ego_dialog` |
-| 元工具 | `ego_help` `ego_doctor` `ego_http` |
+| `ego_page_info` / `ego_read_element` | `ego_snapshot`，`action: info` / `element` |
+| `ego_wait_for_selector` / `ego_wait_for_url` / `ego_wait_for_response` | `ego_wait`，`action: selector` / `url` / `response`；原 `ego_wait` 为 `action: time` |
+| `ego_js` / `ego_cdp` / `ego_script` | `ego_eval`，`action: js` / `cdp` / `script` |
+| `ego_space_open` / `ego_space_close` / `ego_auth_flush` | `ego_space`，`action: open` / `close` / `flush` |
+| `ego_status` | `ego_doctor`，`action: cli` |
+| `ego_captcha` | `ego_snapshot`，`action: info`（返回 `humanCheck`） |
+| `ego_cli` | `ego_eval`，`action: script` |
+| `ego_login_import` | 设置页「从系统浏览器导入登录态」 |
+| `ego_help` | 不再提供；各工具描述已列出全部 `action` 与参数 |
+
+### 按需加载（tool catalog）
+
+19 个工具的 schema 合计约 17 KB（合并前 33 个工具约 21 KB）。宿主装有 `@deepseek-ai/dsh-tool-catalog`（tokenx-base 默认启用）时，可以只让常用的 4 个工具随首个请求下发，其余由 Agent 经 `tool_catalog` 按需加载。在 profile 的 `cordis.patch.yml` 中加入：
+
+```yaml
+# 注意：patch 的 config 整体替换，不与 tokenx-base 合并。
+# 必须先把 tokenx-base 中 tool-catalog 的全部 overrides 原样复制过来，再追加 ego 规则；
+# 只写 ego 规则会让 tokenx-base 原本归入 catalog 的工具全部回到 eager。
+- id: tool-catalog
+  config:
+    defaultDisclosure: eager
+    overrides:
+      # ……tokenx-base 的全部 overrides（packages/bundle/tokenx-base/cordis.patch.yml）……
+      ask_user_question: catalog
+      mcp__*: catalog
+      web_search: catalog
+      # ……
+      ego_*: catalog
+      ego_navigate: eager
+      ego_snapshot: eager
+      ego_click: eager
+      ego_fill: eager
+```
+
+精确名优先于通配符，所以 `ego_*: catalog` 与四条 `eager` 的书写顺序无关。eager 的 4 个工具可按实际任务调整。
 
 ## 观察窗怎么用
 
@@ -195,7 +238,7 @@ pnpm test        # vitest 单元测试
 pnpm run build   # tsdown 三 bundle：lib/index.js + lib/client.js + bin/ego-cast-worker.mjs
 ```
 
-> 直接改 `src/`（`src/index.ts` 工具层、`src/client/index.ts` 前端、`src/worker/ego-cast-worker.ts` worker）。新工具在 `registerActionTools` 里按 `t({...})` 加，并在 `ego_help` 索引（`src/help.ts`）补一条，跑 `pnpm typecheck && pnpm test && pnpm run build`。`lib/` 与 `bin/ego-cast-worker.mjs` 是构建产物（预构建入库），不要手改。
+> 直接改 `src/`（`src/index.ts` 工具层、`src/client/index.ts` 前端、`src/worker/ego-cast-worker.ts` worker）。新工具在 `registerActionTools` 里按 `t({...})` 加，再在 `src/facade.ts` 的 `FACADES` 里给它一个外层工具或路由（不注册的列入 `EXCLUDED`，否则挂载时报错），跑 `pnpm typecheck && pnpm test && pnpm run build`。`lib/` 与 `bin/ego-cast-worker.mjs` 是构建产物（预构建入库），不要手改。
 
 `node_modules/` 仅含指向 DSH checkout 的符号链接（编译期类型解析）；运行时由 harness 解析 `@deepseek-ai/dsh-tools`。
 

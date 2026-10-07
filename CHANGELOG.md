@@ -2,6 +2,22 @@
 
 所有对用户可见的变更集中在各版本号下。格式遵循 [Keep a Changelog](https://keepachangelog.com/)，版本语义遵循 [SemVer](http://semver.org/)。
 
+## [Unreleased] — `ego_*` 工具从 33 个合并为 19 个
+
+### 破坏性变更
+- **工具改名，旧名移除，不保留别名**：10 个页面操作工具（`ego_click` `ego_fill` `ego_key` `ego_hover` `ego_select` `ego_check` `ego_drag` `ego_scroll` `ego_upload` `ego_dialog`）以及 `ego_navigate` `ego_screenshot` `ego_http` `ego_download` 保持原名原参数；其余合并为按 `action` 分路的工具。按旧名写的 prompt、skill 与 catalog 配置需改用新名：
+  - `ego_snapshot`：`page`（默认，原 `ego_snapshot`）、`element`（原 `ego_read_element`）、`info`（原 `ego_page_info`）
+  - `ego_wait`：`time`（原 `ego_wait`）、`selector`（原 `ego_wait_for_selector`）、`url`（原 `ego_wait_for_url`）、`response`（原 `ego_wait_for_response`）
+  - `ego_eval`：`js`（原 `ego_js`）、`cdp`（原 `ego_cdp`）、`script`（原 `ego_script`）
+  - `ego_space`：`open`（原 `ego_space_open`）、`close`（原 `ego_space_close`）、`flush`（原 `ego_auth_flush`）
+  - `ego_doctor`：`full`（默认，原 `ego_doctor`）、`cli`（原 `ego_status`）
+- **不再注册为工具**：`ego_login_import`（改用设置页「从系统浏览器导入登录态」，`POST /api/ego/login-import` 路由不变）、`ego_help`（各工具描述已列出全部 `action` 与参数）、`ego_captcha`（改用 `ego_snapshot` 的 `info`，返回 `humanCheck`）、`ego_cli`（改用 `ego_eval` 的 `script`）。
+- **多路由工具拒绝越界参数**：传入不属于所选 `action` 的参数时调用失败，错误信息列出该 `action` 接受的参数；原工具会静默忽略多余参数。
+
+### 变更
+- **登录态导入改为「探测 → 勾选 → 导入」**：DSH 0.1.7 的插件配置页此前不显示导入块，现已补上；新增来源 profile 下拉（`GET /api/ego/login-import/sources`）。探测结果按域名列出 cookie 数，默认不勾选，「导入」只发送勾选的域名；不再支持不探测直接导入。
+- 工具 schema 总量从约 21 KB 降到约 17 KB。README 新增 tool catalog 分档配置示例（`ego_*: catalog`，`ego_navigate` `ego_snapshot` `ego_click` `ego_fill` 为 `eager`）。
+
 ## [0.8.6] - 2026-09-28 — 登录态导入安全加固 + DSH 0.1.7 设置适配 + 人机验证误报修复
 
 ### 安全
