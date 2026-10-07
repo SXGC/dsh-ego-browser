@@ -32,20 +32,32 @@ export interface FacadeSpec {
 
 const single = (name: string): FacadeSpec => ({ name, routes: { _: name } })
 
-/** 外层描述中的一行：`- <action> (<原工具参数>): <原工具描述>`。 */
-const routeLine = (inner: InnerTools, action: string, toolName: string): string => {
+/**
+ * 外层描述中的一行：`- <action> (<原工具参数>): <原工具描述>`。
+ * 原描述引用了不再注册的工具名时，用 `text` 代替原描述。
+ */
+const routeLine = (inner: InnerTools, action: string, toolName: string, text?: string): string => {
   const tool = inner.get(toolName)
   const params = tool === undefined ? [] : Object.keys(propsOf(tool))
-  return `- ${action} (${params.join(', ')}): ${tool?.description ?? ''}`
+  return `- ${action} (${params.join(', ')}): ${text ?? tool?.description ?? ''}`
 }
 
 /** 外层工具。顺序即注册顺序。 */
 export const FACADES: readonly FacadeSpec[] = [
   single('ego_navigate'),
-  // 临时单路由：EGO-02 合并为 ego_snapshot（page / element / info）。
-  single('ego_snapshot'),
-  single('ego_read_element'),
-  single('ego_page_info'),
+  {
+    name: 'ego_snapshot',
+    defaultAction: 'page',
+    routes: { page: 'ego_snapshot', element: 'ego_read_element', info: 'ego_page_info' },
+    description: (inner) => [
+      'Observe the current page in the Agent browser. Pick what to read with `action` (default: page); the other arguments are those of that action.',
+      routeLine(inner, 'page', 'ego_snapshot') +
+        ' The [ref=N, loc=...] selectors are the targets for ego_click, ego_fill and the other page-action tools.',
+      routeLine(inner, 'element', 'ego_read_element'),
+      routeLine(inner, 'info', 'ego_page_info') +
+        ' When humanCheck.detected is true, tell the user to complete the verification in the Agent browser window.',
+    ].join('\n'),
+  },
   single('ego_screenshot'),
   // 10 个页面操作：单路由，原样注册
   ...['ego_click', 'ego_fill', 'ego_key', 'ego_hover', 'ego_select',
@@ -66,19 +78,43 @@ export const FACADES: readonly FacadeSpec[] = [
       routeLine(inner, 'response', 'ego_wait_for_response'),
     ].join('\n'),
   },
-  // 临时单路由：EGO-02 合并为 ego_eval（js / cdp / script）。
-  single('ego_js'),
-  single('ego_cdp'),
-  single('ego_script'),
+  {
+    name: 'ego_eval',
+    routes: { js: 'ego_js', cdp: 'ego_cdp', script: 'ego_script' },
+    description: (inner) => [
+      'Run code in the Agent browser. Pick how with `action`; the other arguments are those of that action.',
+      routeLine(inner, 'js', 'ego_js'),
+      routeLine(inner, 'cdp', 'ego_cdp'),
+      // 原描述引用已不注册的 ego_cli。
+      routeLine(inner, 'script', 'ego_script',
+        'Run an arbitrary `ego-browser nodejs` script in ONE invocation (page/…locator/browser/taskSpaces/site/fetch/cdp preloaded) and return structured {ok, stdout, stderr, result, durationMs, timedOut}. Use for a full multi-step browser task as a single script.'),
+    ].join('\n'),
+  },
   single('ego_http'),
   single('ego_download'),
-  // 临时单路由：EGO-02 合并为 ego_space（open / close / flush）。
-  single('ego_space_open'),
-  single('ego_space_close'),
-  single('ego_auth_flush'),
-  // 临时单路由：EGO-02 合并为 ego_doctor（full / cli）。
-  single('ego_doctor'),
-  single('ego_status'),
+  {
+    name: 'ego_space',
+    routes: { open: 'ego_space_open', close: 'ego_space_close', flush: 'ego_auth_flush' },
+    description: (inner) => [
+      'Manage the Agent browser task space. Pick the operation with `action`; the other arguments are those of that action.',
+      routeLine(inner, 'open', 'ego_space_open'),
+      routeLine(inner, 'close', 'ego_space_close'),
+      routeLine(inner, 'flush', 'ego_auth_flush'),
+    ].join('\n'),
+    paramDescriptions: {
+      name: "Task-space name (close also accepts a numeric id). In persistent profile mode (default), ALWAYS use the single 'default' space.",
+    },
+  },
+  {
+    name: 'ego_doctor',
+    defaultAction: 'full',
+    routes: { full: 'ego_doctor', cli: 'ego_status' },
+    description: (inner) => [
+      'Diagnose the Agent browser environment. Pick the check with `action` (default: full).',
+      routeLine(inner, 'full', 'ego_doctor'),
+      routeLine(inner, 'cli', 'ego_status'),
+    ].join('\n'),
+  },
 ]
 
 /** 收集到但不注册的原工具。 */
@@ -126,6 +162,18 @@ interface ObjectSchema {
 const propsOf = (tool: ToolDefinition): Record<string, Record<string, unknown>> =>
   (tool.parameters as ObjectSchema).properties ?? {}
 
+/** 多路由调用的 action：`args.action ?? spec.defaultAction`；取值不在 routes 中时 `tool` 为 undefined。 */
+const resolveRoute = (spec: FacadeSpec, inner: InnerTools, args: unknown): { action: unknown; tool: ToolDefinition | undefined } => {
+  const action = (args as { action?: unknown } | null)?.action ?? spec.defaultAction
+  const tool = typeof action === 'string' && Object.hasOwn(spec.routes, action) ? inner.get(spec.routes[action]) : undefined
+  return { action, tool }
+}
+
+const withoutAction = (args: unknown): Record<string, unknown> => {
+  const { action: _action, ...rest } = (args ?? {}) as Record<string, unknown>
+  return rest
+}
+
 /**
  * 由一个多路由 FacadeSpec 构造 ToolDefinition。
  * - parameters：`action`（string enum，无 defaultAction 时 required）加各路由参数的并集；
@@ -160,15 +208,6 @@ function buildFacade(spec: FacadeSpec, inner: InnerTools): ToolDefinition {
   const timeouts = Object.values(spec.routes)
     .map((toolName) => inner.get(toolName)!.timeoutMs)
     .filter((ms): ms is number => typeof ms === 'number')
-  const routeOf = (args: unknown): ToolDefinition | undefined => {
-    const action = (args as { action?: unknown } | null)?.action ?? spec.defaultAction
-    const toolName = typeof action === 'string' && Object.hasOwn(spec.routes, action) ? spec.routes[action] : undefined
-    return toolName === undefined ? undefined : inner.get(toolName)
-  }
-  const withoutAction = (args: unknown): Record<string, unknown> => {
-    const { action: _action, ...rest } = (args ?? {}) as Record<string, unknown>
-    return rest
-  }
   return {
     name: spec.name,
     description: spec.description?.(inner) ?? '',
@@ -183,14 +222,14 @@ function buildFacade(spec: FacadeSpec, inner: InnerTools): ToolDefinition {
     output: {
       schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] },
       render(args, value) {
-        const tool = routeOf(args)
+        const { tool } = resolveRoute(spec, inner, args)
         return tool === undefined ? [{ type: 'text', text: JSON.stringify(value) }] : tool.output.render(withoutAction(args), value)
       },
     },
     ...(timeouts.length > 0 ? { timeoutMs: Math.max(...timeouts) } : {}),
     execute: (args, exec) => dispatch(spec, inner, (args ?? {}) as Record<string, unknown>, exec),
     presentCall(args) {
-      const action = (args as { action?: unknown } | null)?.action ?? spec.defaultAction
+      const { action } = resolveRoute(spec, inner, args)
       return {
         card: 'generic',
         title: typeof action === 'string' ? `${spec.name} · ${action}` : spec.name,
@@ -211,9 +250,8 @@ function buildFacade(spec: FacadeSpec, inner: InnerTools): ToolDefinition {
  */
 async function dispatch(spec: FacadeSpec, inner: InnerTools, args: Record<string, unknown>, exec: ToolRunContext): Promise<unknown> {
   const actions = Object.keys(spec.routes)
-  const { action: rawAction, ...rest } = args
-  const action = rawAction ?? spec.defaultAction
-  if (typeof action !== 'string' || !Object.hasOwn(spec.routes, action)) {
+  const { action, tool } = resolveRoute(spec, inner, args)
+  if (tool === undefined) {
     throw new FacadeArgsError(
       'unknown_action',
       spec.name,
@@ -221,7 +259,7 @@ async function dispatch(spec: FacadeSpec, inner: InnerTools, args: Record<string
       `${spec.name}: unknown action ${JSON.stringify(action)}. Use one of: ${actions.join(', ')}.`,
     )
   }
-  const tool = inner.get(spec.routes[action])!
+  const rest = withoutAction(args)
   const accepted = Object.keys(propsOf(tool))
   const extra = Object.keys(rest).filter((param) => !accepted.includes(param))
   if (extra.length > 0) {
