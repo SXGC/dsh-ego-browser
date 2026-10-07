@@ -33,7 +33,7 @@
  *   - import is a one-shot snapshot, never a continuous sync.
  */
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, rm, symlink } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rm, symlink } from 'node:fs/promises'
 import { execFile as execFileCb } from 'node:child_process'
 import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
@@ -291,6 +291,26 @@ async function closeSourceBrowser(browserExe: string, platform: NodeJS.Platform 
   }
 }
 
+/**
+ * Linux: end every process whose command line contains `marker` (the run's
+ * unique temp dir) — SIGTERM, then SIGKILL whatever is still alive after a
+ * short grace. Resolves once none is left or the deadline passes.
+ */
+async function killByCommandLine(marker: string): Promise<void> {
+  const pattern = marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const gone = async (ms: number): Promise<boolean> => {
+    for (const deadline = Date.now() + ms; Date.now() < deadline; await sleep(200)) {
+      const { stdout } = await execFile('pgrep', ['-f', pattern], { timeout: 5_000 }).catch(() => ({ stdout: '' }))
+      if (String(stdout).trim() === '') return true
+    }
+    return false
+  }
+  await execFile('pkill', ['-TERM', '-f', pattern], { timeout: 5_000 }).catch(() => null)
+  if (await gone(3_000)) return
+  await execFile('pkill', ['-KILL', '-f', pattern], { timeout: 5_000 }).catch(() => null)
+  await gone(3_000)
+}
+
 // ── cookie-store backup insurance ───────────────────────────────────────────
 //
 // Hard lesson (2026-09-15, dev incident on a real Edge profile): an instance
@@ -455,8 +475,14 @@ export async function importLoginCookies(opts: LoginImportOptions, deps: { subpr
   let linkDir: string | null = null
   let backup: BackupInfo | null = null
   let pendingReport: LoginImportReport | null = null
+  // Linux: no App-Bound Encryption (the cookie key comes from the system
+  // keyring, not the profile location), and Chrome resolves a symlinked
+  // user-data-dir back to the default one and refuses CDP on it. So boot a
+  // throwaway COPY of Local State + the profile's Cookies instead — the real
+  // profile is only read: no lock, no source-browser check, no backup/restore.
+  const linux = process.platform === 'linux'
   try {
-    const runningPids = await sourceBrowserPids(browser.exePath, opts.browserOverride ? browser.userDataDir : null)
+    const runningPids = linux ? [] : await sourceBrowserPids(browser.exePath, opts.browserOverride ? browser.userDataDir : null)
     if (runningPids.length > 0) {
       if (opts.browserOverride) {
         return { ok: false, error: 'an instance is already running on the override profile — close it and retry' }
@@ -478,7 +504,7 @@ export async function importLoginCookies(opts: LoginImportOptions, deps: { subpr
     // A boot that judges the store corrupt can reset it (observed in the
     // wild); the finally block hard-kills the instance and restores the backup
     // unconditionally (see restoreCookieStore).
-    backup = await backupCookieStore(profile.dir, join(opts.stateDir || resolveEgoStateDir(), 'login-import-backups'))
+    if (!linux) backup = await backupCookieStore(profile.dir, join(opts.stateDir || resolveEgoStateDir(), 'login-import-backups'))
 
     // ── boot the genuine binary headless on the REAL profile ───────────────
     // Reached through a junction/symlink alias: Chromium ≥136 refuses CDP on
@@ -488,7 +514,14 @@ export async function importLoginCookies(opts: LoginImportOptions, deps: { subpr
     // performs; Browser.close in finally keeps the shutdown graceful so no
     // crash-restore mark is earned.
     linkDir = join(tmpdir(), `ego-login-import-${process.pid}-${Date.now()}`)
-    await symlink(browser.userDataDir, linkDir, process.platform === 'win32' ? 'junction' : 'dir')
+    if (linux) {
+      await mkdir(join(linkDir, profile.dirName), { recursive: true })
+      await copyFile(join(browser.userDataDir, 'Local State'), join(linkDir, 'Local State'))
+      await copyFile(join(profile.dir, 'Cookies'), join(linkDir, profile.dirName, 'Cookies'))
+      try { await copyFile(join(profile.dir, 'Cookies-journal'), join(linkDir, profile.dirName, 'Cookies-journal')) } catch { /* optional */ }
+    } else {
+      await symlink(browser.userDataDir, linkDir, process.platform === 'win32' ? 'junction' : 'dir')
+    }
     // A previous import's instance may still be draining (Browser.close flushes
     // the cookie store before exit) while holding the profile singleton lock —
     // a new spawn would forward to it and never open a DevTools port. Wait for
@@ -526,7 +559,8 @@ export async function importLoginCookies(opts: LoginImportOptions, deps: { subpr
     // flush can outlive the 12s drain window): a spawn while it still holds
     // the profile singleton forwards and never opens a port. Retry once with
     // a fresh junction after a longer drain.
-    for (let attempt = 0; attempt < 2 && port === null; attempt++) {
+    // (Linux boots a private copy — no singleton to race, no retry.)
+    for (let attempt = 0; attempt < (linux ? 1 : 2) && port === null; attempt++) {
       if (attempt > 0) {
         await sleep(6000)
         try { await rm(linkDir, { force: true }) } catch { /* ignore */ }
@@ -549,7 +583,7 @@ export async function importLoginCookies(opts: LoginImportOptions, deps: { subpr
           '--hide-crash-restore-bubble',
           'about:blank',
         ],
-        cwd: browser.userDataDir,
+        cwd: linux ? linkDir! : browser.userDataDir,
         env: { ...process.env },
         stdio: { stdin: { data: '' }, stdout: { maxBytes: 2048 }, stderr: { maxBytes: 4096 } },
         graceMs: 8_000,
@@ -565,7 +599,7 @@ export async function importLoginCookies(opts: LoginImportOptions, deps: { subpr
         await sleep(250)
       }
     }
-    if (port === null) return { ok: false, closedSource, error: `${browser.label} headless instance did not expose a DevTools port within ${timeoutMs}ms (another instance may be holding the profile)` }
+    if (port === null) return { ok: false, closedSource, error: `${browser.label} headless instance did not expose a DevTools port within ${timeoutMs}ms${linux ? '' : ' (another instance may be holding the profile)'}` }
 
     tempCdp = await connectCdp(await browserWsUrl(port), 5000)
     // The DevTools endpoint comes up BEFORE the cookie store finishes loading
@@ -701,8 +735,12 @@ export async function importLoginCookies(opts: LoginImportOptions, deps: { subpr
     // RESOLVED profile path, so the NEXT import on the same source blocks
     // until this instance is really gone. Wait properly; escalate only if it
     // still will not die (a throwaway headless instance, safe to close).
+    // Linux: nothing ever closes a headless instance on its own — end the
+    // whole process tree of THIS run (every process whose command line names
+    // our unique temp dir) before waiting on it.
+    if (srcHandle && linux && linkDir) await killByCommandLine(linkDir)
     if (srcHandle) {
-      try { await Promise.race([srcHandle.done, sleep(25_000)]) } catch { /* ignore */ }
+      try { await Promise.race([srcHandle.done, sleep(linux ? 5_000 : 25_000)]) } catch { /* ignore */ }
       if (process.platform === 'win32' && linkDir) {
         try {
           const ps = [
@@ -723,13 +761,13 @@ export async function importLoginCookies(opts: LoginImportOptions, deps: { subpr
         } catch { /* ignore */ }
       }
     }
-    if (linkDir) { try { await rm(linkDir, { force: true }) } catch { /* ignore */ } }
+    if (linkDir) { try { await rm(linkDir, { force: true, recursive: linux }) } catch { /* ignore */ } }
     // [#61] Unconditional restore + verify. The pre-boot backup is the only
     // writer of the cookie store now; a headless boot on about:blank earns no
     // cookies, so the source store must end the run byte-equivalent in rows.
     // (If a source browser process REAPPEARED, the user is using it — skip
     // the restore rather than fight a live writer; the backup stays on disk.)
-    const stillRunning = await sourceBrowserPids(browser.exePath, opts.browserOverride ? browser.userDataDir : null)
+    const stillRunning = linux ? [] : await sourceBrowserPids(browser.exePath, opts.browserOverride ? browser.userDataDir : null)
     if (backup && stillRunning.length === 0) {
       if (await restoreCookieStore(profile.dir, backup)) {
         if (pendingReport) pendingReport.restoredFromBackup = true

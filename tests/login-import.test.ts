@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import {
   chromiumCandidates,
   detectSystemBrowsers,
@@ -8,8 +8,10 @@ import {
   parseDevToolsActivePort,
   resolveEgoStateDir,
   listLoginSources,
+  importLoginCookies,
 } from "../src/login-import.ts";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, readdirSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { spawn as cpSpawn, execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -158,5 +160,94 @@ describe("listLoginSources", () => {
       { id: "chrome", label: "Google Chrome", profiles: [{ dirName: "Default", name: "Personal" }, { dirName: "Profile 1", name: "Work" }] },
       { id: "edge", label: "Microsoft Edge", profiles: [{ dirName: "Default", name: "Default" }] },
     ]);
+  });
+});
+
+// Linux branch of importLoginCookies (S11 / D6). The "browser" is a fake
+// subprocess: a real node process (plus one child) whose command lines carry
+// the spawn argv, so the reaping is exercised for real — never a real Chrome.
+describe.skipIf(process.platform !== "linux")("importLoginCookies on Linux", () => {
+  const FAKE = "const cp=require('child_process');if(!process.env.EGO_FAKE_CHILD)cp.spawn(process.execPath,['-e',process.env.EGO_FAKE_SRC,'--',...process.argv.slice(1)],{env:{...process.env,EGO_FAKE_CHILD:'1'},stdio:'ignore'});setInterval(()=>{},1000)";
+  const dirs: string[] = [];
+  afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
+
+  function fakeSource() {
+    const root = mkdtempSync(join(tmpdir(), "ego-li-src-"));
+    dirs.push(root);
+    const userDataDir = join(root, "google-chrome");
+    mkdirSync(join(userDataDir, "Profile 1"), { recursive: true });
+    writeFileSync(join(userDataDir, "Local State"), JSON.stringify({ profile: { info_cache: { Default: { name: "A" }, "Profile 1": { name: "B" } } } }));
+    writeFileSync(join(userDataDir, "Profile 1", "Cookies"), "sqlite-bytes");
+    writeFileSync(join(userDataDir, "Profile 1", "Cookies-journal"), "journal-bytes");
+    return { exePath: "/fake/chrome", userDataDir };
+  }
+  const listTree = (dir: string): string[] =>
+    readdirSync(dir, { recursive: true, encoding: "utf8" }).sort();
+
+  function fakeSpawn(onSpawn: (argv: readonly string[]) => void) {
+    const spawned: { pid: number; exited: Promise<unknown> }[] = [];
+    return {
+      spawned,
+      subprocess: {
+        spawn(spec: { argv: readonly string[] }) {
+          onSpawn(spec.argv);
+          const child = cpSpawn(process.execPath, ["-e", FAKE, "--", ...spec.argv], { env: { ...process.env, EGO_FAKE_SRC: FAKE }, stdio: "ignore" });
+          const done = new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>((res) => child.on("exit", (exitCode, signal) => res({ exitCode, signal })));
+          spawned.push({ pid: child.pid!, exited: done });
+          return { done };
+        },
+      },
+    };
+  }
+  const alive = (pattern: string): string => {
+    try { return execFileSync("pgrep", ["-f", pattern], { encoding: "utf8" }).trim(); } catch { return ""; }
+  };
+
+  it("boots a temp copy of Local State + the profile's Cookies; the source dir gains nothing (S11/D6)", async () => {
+    const src = fakeSource();
+    const before = listTree(src.userDataDir);
+    let tempDir = "";
+    let copied: Record<string, string> = {};
+    const fake = fakeSpawn((argv) => {
+      expect(argv[0]).toBe("/fake/chrome");
+      tempDir = argv.find((a) => a.startsWith("--user-data-dir="))!.slice("--user-data-dir=".length);
+      expect(tempDir).toMatch(/[\\/]ego-login-import-\d+-\d+$/);
+      expect(tempDir.startsWith(src.userDataDir)).toBe(false);
+      expect(argv).toContain("--profile-directory=Profile 1");
+      expect(argv).toContain("--remote-debugging-port=0");
+      copied = Object.fromEntries(listTree(tempDir).map((f) => [f, existsSync(join(tempDir, f)) && !f.endsWith("Profile 1") ? readFileSync(join(tempDir, f), "utf8") : ""]));
+    });
+    const report = await importLoginCookies(
+      { browserOverride: { id: "chrome", label: "Fake Chrome", ...src }, profile: "Profile 1", dryRun: true, timeoutMs: 300 },
+      { subprocess: fake.subprocess },
+    );
+    expect(report.ok).toBe(false);
+    expect(fake.spawned).toHaveLength(1);
+    expect(copied).toEqual({
+      "Local State": readFileSync(join(src.userDataDir, "Local State"), "utf8"),
+      "Profile 1": "",
+      "Profile 1/Cookies": "sqlite-bytes",
+      "Profile 1/Cookies-journal": "journal-bytes",
+    });
+    expect(listTree(src.userDataDir)).toEqual(before);
+    expect(readFileSync(join(src.userDataDir, "Profile 1", "Cookies"), "utf8")).toBe("sqlite-bytes");
+  });
+
+  it("port timeout: fails, removes the temp dir and ends this run's process tree (D6)", async () => {
+    const src = fakeSource();
+    let tempDir = "";
+    const fake = fakeSpawn((argv) => {
+      tempDir = argv.find((a) => a.startsWith("--user-data-dir="))!.slice("--user-data-dir=".length);
+    });
+    const report = await importLoginCookies(
+      { browserOverride: { id: "chrome", label: "Fake Chrome", ...src }, profile: "Profile 1", dryRun: true, timeoutMs: 300 },
+      { subprocess: fake.subprocess },
+    );
+    expect(report.ok).toBe(false);
+    expect(report.error).toMatch(/did not expose a DevTools port within 300ms$/);
+    expect(report.closedSource).toBe(false);
+    expect(existsSync(tempDir)).toBe(false);
+    expect(await fake.spawned[0].exited).toMatchObject({ signal: "SIGTERM" });
+    expect(alive(tempDir)).toBe("");
   });
 });

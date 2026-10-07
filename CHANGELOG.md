@@ -16,6 +16,10 @@
 
 ### 变更
 - **登录态导入改为「探测 → 勾选 → 导入」**：DSH 0.1.7 的插件配置页此前不显示导入块，现已补上；新增来源 profile 下拉（`GET /api/ego/login-import/sources`）。探测结果按域名列出 cookie 数，默认不勾选，「导入」只发送勾选的域名；不再支持不探测直接导入。
+
+### 修复
+- **Linux 上登录态导入不可用**：Chrome 136+ 会解析符号链接，拒绝在默认资料目录上开 DevTools 端口，探测必然超时。Linux 改为把 `Local State` 与所选 profile 的 `Cookies` 复制到临时目录后读取，原资料目录只读、不必关闭源浏览器（`closeSource` 在 Linux 上被忽略）。
+- **Linux 上导入后残留 headless 进程**：成功、超时、异常各路径都结束本次启动的进程并删除临时目录；此前残留进程会持有 profile 的 SingletonLock，导致之后的探测和日常 Chrome 启动失败。
 - 工具 schema 总量从约 21 KB 降到约 17 KB。README 新增 tool catalog 分档配置示例（`ego_*: catalog`，`ego_navigate` `ego_snapshot` `ego_click` `ego_fill` 为 `eager`）。
 
 ## [0.8.6] - 2026-09-28 — 登录态导入安全加固 + DSH 0.1.7 设置适配 + 人机验证误报修复
