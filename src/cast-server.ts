@@ -742,13 +742,14 @@ export function initCastServer(
 
   // GET /api/ego/login-import/sources — detected system browsers and their
   // profiles for the settings card's pickers. Reads Local State only.
+  // `platform` is the server's: the card may be opened from another machine.
   const disposeLoginSources = server.register({
     kind: 'exact',
     path: EGO_LOGIN_SOURCES_ROUTE,
     handler: async (_req: unknown, resRaw: unknown) => {
       const res = resRaw as ServerResponse
       try {
-        return sendJson(res, 200, { ok: true, sources: await listSources() })
+        return sendJson(res, 200, { ok: true, platform: process.platform, sources: await listSources() })
       } catch (err) {
         return sendJson(res, 500, { ok: false, error: String((err as Error)?.message || err) })
       }

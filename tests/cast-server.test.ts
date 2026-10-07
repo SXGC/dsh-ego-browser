@@ -92,9 +92,9 @@ describe("login-import sources route", () => {
     }
   }
 
-  it("returns 200 with the injected sources", async () => {
+  it("returns 200 with the injected sources and the server platform", async () => {
     const sources: LoginSource[] = [{ id: "chrome", label: "Google Chrome", profiles: [{ dirName: "Profile 1", name: "Work" }] }];
-    expect(await get(sourcesHandler(async () => sources))).toEqual({ status: 200, body: { ok: true, sources } });
+    expect(await get(sourcesHandler(async () => sources))).toEqual({ status: 200, body: { ok: true, platform: process.platform, sources } });
   });
 
   it("returns 500 with the error when listing throws", async () => {

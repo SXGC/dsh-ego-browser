@@ -623,6 +623,8 @@ declare function require(id: string): any
 			var _profile = useState(''), profile = _profile[0], setProfile = _profile[1]
 			var _domains = useState(''), domains = _domains[0], setDomains = _domains[1]
 			var _close = useState(false), closeSource = _close[0], setCloseSource = _close[1]
+			// 服务端平台（sources 响应）。Linux 读资料目录副本、忽略 closeSource，故隐藏勾选框；未知时照旧显示。
+			var _platform = useState(null), platform = _platform[0], setPlatform = _platform[1]
 			var _run = useState(false), running = _run[0], setRunning = _run[1]
 			var _res = useState(null), result = _res[0], setResult = _res[1]
 			// 最近一次成功探测的结果；勾选只在它上面进行，换来源 / profile / 范围后作废。
@@ -637,6 +639,7 @@ declare function require(id: string): any
 						if (!alive) return
 						if (j && j.ok === true && Array.isArray(j.sources)) {
 							setSources(j.sources)
+							if (typeof j.platform === 'string') setPlatform(j.platform)
 							if (j.sources.length === 0) setSourcesError('no system Chromium browser found')
 						} else setSourcesError((j && j.error) || 'no response')
 					})
@@ -647,6 +650,7 @@ declare function require(id: string): any
 			// `auto` 与服务端一致：取检测顺序中的第一个浏览器。
 			var current = source === 'auto' ? sources[0] : sources.filter(function (s) { return s.id === source })[0]
 			var profiles = (current && current.profiles) || []
+			var showCloseSource = platform !== 'linux'
 			var profileDir = profiles.some(function (p) { return p.dirName === profile }) ? profile : (profiles[0] ? profiles[0].dirName : '')
 
 			function resetProbe() { setProbe(null); setChecked([]); setResult(null) }
@@ -656,7 +660,7 @@ declare function require(id: string): any
 				var body = {
 					source: source,
 					domains: dryRun ? domains.split(',').map(function (s) { return s.trim() }).filter(Boolean) : checked,
-					closeSource: closeSource,
+					closeSource: showCloseSource && closeSource,
 					dryRun: dryRun,
 					// 空 = sources 不可用（只剩 auto）：不带 profile，JSON.stringify 会丢掉 undefined。
 					profile: profileDir || undefined,
@@ -727,10 +731,10 @@ declare function require(id: string): any
 				),
 				sourcesError ? h('div', { className: 'dsh-ego-card__failed', role: 'status' }, t('loginImportSourcesFailed') + sourcesError) : null,
 				h('div', { className: 'dsh-ego-card__hint' }, t('loginImportDomainsHint')),
-				h('label', { className: 'dsh-ego-card__hint', style: rowStyle },
+				showCloseSource ? h('label', { className: 'dsh-ego-card__hint', style: rowStyle },
 					h('input', { type: 'checkbox', checked: closeSource, disabled: running, onChange: function (e) { setCloseSource(e.target.checked) } }),
 					t('loginImportCloseSource'),
-				),
+				) : null,
 				probe ? (probeDomains.length === 0
 					? h('div', { className: 'dsh-ego-card__hint' }, t('loginImportNoDomains'))
 					: h('div', { className: 'dsh-ego-card__login-domains' },

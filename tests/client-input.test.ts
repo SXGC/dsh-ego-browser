@@ -40,6 +40,14 @@ describe("settings login import block", () => {
     expect(block).toMatch(/source === 'auto' \? sources\[0\]/);
   });
 
+  it("hides the close-source checkbox and sends closeSource false only when the server reports linux", () => {
+    expect(block).toMatch(/if \(typeof j\.platform === 'string'\) setPlatform\(j\.platform\)/);
+    expect(block).toMatch(/useState\(null\), platform = /);
+    expect(block).toMatch(/var showCloseSource = platform !== 'linux'/);
+    expect(block).toMatch(/closeSource: showCloseSource && closeSource,/);
+    expect(block).toMatch(/showCloseSource \? h\('label'[\s\S]+?t\('loginImportCloseSource'\),\s+\) : null,/);
+  });
+
   it("imports only the ticked domains and disables import until something is ticked", () => {
     expect(block).toMatch(/domains: dryRun \? domains\.split\(','\)[^\n]+: checked,/);
     expect(block).toMatch(/disabled: running \|\| !probe \|\| checked\.length === 0/);
