@@ -44,6 +44,7 @@ import { EGO_HELP_INDEX } from './help.ts'
 import { HUMAN_CHECK_PROBE } from './captcha.ts'
 import { Config as ConfigSchema, resolveConfig, EGO_CLI_BLOCKED, CHROME_BLOCKED, filterArgs } from './config.ts'
 import { installEgoBrowserSettings } from './settings.ts'
+import { registerFacades } from './facade.ts'
 import { registerEgoBrowserGateway } from './gateway.ts'
 import { getSharedFfmpegInstallationManager } from './ffmpeg-installation.ts'
 import { SENTINEL, j, str, num, bool, readAll, SAFE_FN } from './util.ts'
@@ -786,16 +787,19 @@ export function apply(ctx: EgoContext, config: RawConfig = {}): void {
     // settings card toggle takes effect without a host restart.
     get disableFrameRelay() { return resolveConfig(bridge.source() as RawConfig).disableFrameRelay },
   }
-  const reg = (tool: ToolHandle): void => {
-    const dispose = ctx.tools.register(tool) as unknown as () => void
-    // Cordis lifecycle: unregister the tool when the plugin unmounts.
-    ctx.effect?.(() => dispose)
-  }
+  // Collect the original tools; src/facade.ts registers the outer tools.
+  const inner = new Map<string, ToolHandle>()
+  const reg = (tool: ToolHandle): void => { inner.set(tool.name, tool) }
   registerEgoStatus(ctx, cfg, reg)
   registerAuthFlush(ctx, cfg, reg)
   registerLoginImport(ctx, cfg, reg)
   registerActionTools(ctx, cfg, reg)
   registerHelpAndDoctor(ctx, cfg, reg)
+  registerFacades(inner, (tool) => {
+    const dispose = ctx.tools.register(tool) as unknown as () => void
+    // Cordis lifecycle: unregister the tool when the plugin unmounts.
+    ctx.effect?.(() => dispose)
+  })
   // Realtime watch-panel host routes (/api/ego/*). Guarded: only meaningful
   // when the host exposes an HTTP server (web surface); headless safe-no-op.
   // The host service is `webServer` on the web shell (current runner). We only
