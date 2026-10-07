@@ -22,3 +22,42 @@ describe("watch panel input and capture status", () => {
     expect(source).toMatch(/githubMirror/);
   });
 });
+
+describe("settings login import block", () => {
+  const block = source.slice(source.indexOf("function LoginImportBlock(props)"), source.indexOf("function EgoBrowserForm(props)"));
+  const hostForm = source.slice(source.indexOf("function EgoHostConfigForm(props)"), source.indexOf("function isFfmpegBusy("));
+  const fnSrc = source.slice(source.indexOf("function loginDomainCoveredBy("), source.indexOf("function LoginImportBlock(props)"));
+  const coveredBy = new Function(`${fnSrc}; return loginDomainCoveredBy;`)() as (d: string, checked: string[]) => string | null;
+
+  it("is mounted in both the 0.1.7 host form and the legacy form", () => {
+    expect(hostForm).toMatch(/h\(LoginImportBlock, \{ t: t \}\)/);
+    expect((source.match(/h\(LoginImportBlock, \{ t: t \}\)/g) || []).length).toBe(2);
+  });
+
+  it("loads sources and sends the selected profile dirName", () => {
+    expect(block).toMatch(/fetch\('\/api\/ego\/login-import\/sources'\)/);
+    expect(block).toMatch(/profile: profileDir \|\| undefined,/);
+    expect(block).toMatch(/source === 'auto' \? sources\[0\]/);
+  });
+
+  it("imports only the ticked domains and disables import until something is ticked", () => {
+    expect(block).toMatch(/domains: dryRun \? domains\.split\(','\)[^\n]+: checked,/);
+    expect(block).toMatch(/disabled: running \|\| !probe \|\| checked\.length === 0/);
+    // A fresh probe starts with nothing ticked.
+    expect(block).toMatch(/setProbe\(res\); setChecked\(\[\]\)/);
+  });
+
+  it("shows covered subdomain rows as ticked and locked", () => {
+    expect(block).toMatch(/checked: by !== null \|\| checked\.indexOf\(d\.domain\) !== -1, disabled: running \|\| by !== null/);
+  });
+
+  it("matches the server's cookieMatchesDomains rule for subdomain coverage", () => {
+    expect(coveredBy("x.a.com", [".a.com"])).toBe(".a.com");
+    expect(coveredBy(".x.a.com", ["a.com"])).toBe("a.com");
+    expect(coveredBy("a.com", [".a.com"])).toBe(".a.com");
+    expect(coveredBy(".a.com", [".a.com"])).toBeNull();
+    expect(coveredBy("xa.com", [".a.com"])).toBeNull();
+    expect(coveredBy("a.com", ["x.a.com"])).toBeNull();
+    expect(coveredBy("b.com", [])).toBeNull();
+  });
+});

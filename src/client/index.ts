@@ -88,10 +88,14 @@ declare function require(id: string): any
 		relayDisabledBody: 'Turn off "Disable live frame relay" in Settings → Plugins → ego-browser to see the live view here.',
 		minUnit: 'min',
 		loginImportTitle: 'Import logins from system browser',
-		loginImportIntro: 'Copy login cookies from your daily Chrome/Edge/Brave into the agent browser (CDP passthrough — no offline decryption). Probe first, then import with an explicit domain list.',
+		loginImportIntro: 'Copy login cookies from your daily Chrome/Edge/Brave into the agent browser (CDP passthrough — no offline decryption). Probe first, then tick the domains to import.',
 		loginImportSource: 'Source',
-		loginImportDomains: 'Domains (comma-separated; empty = ALL)',
-		loginImportDomainsHint: 'e.g. bilibili.com, zhihu.com — subdomains included. Prefer an explicit list over importing everything.',
+		loginImportProfile: 'Profile',
+		loginImportDomains: 'Probe scope: domains (comma-separated; empty = ALL)',
+		loginImportDomainsHint: 'e.g. bilibili.com, zhihu.com — subdomains included. Probe lists the domains found; tick the ones to import.',
+		loginImportSelectAll: 'Select all',
+		loginImportNoDomains: 'No matching cookies found.',
+		loginImportSourcesFailed: 'Could not list system browsers; falling back to auto: ',
 		loginImportCloseSource: 'Close the source browser first if it is running (windows restore on next launch)',
 		loginImportProbe: 'Probe',
 		loginImportRun: 'Import',
@@ -128,10 +132,14 @@ declare function require(id: string): any
 		relayDisabledBody: '在「设置 → 插件 → ego-browser」中关闭「禁用画面回传」后，这里才会显示实时画面。',
 		minUnit: '分钟',
 		loginImportTitle: '从系统浏览器导入登录态',
-		loginImportIntro: '把你日常 Chrome/Edge/Brave 里的登录 cookie 复制进 agent 浏览器（CDP 透传，不做离线解密）。建议先「探测」看可导入项，再按域名导入。',
+		loginImportIntro: '把你日常 Chrome/Edge/Brave 里的登录 cookie 复制进 agent 浏览器（CDP 透传，不做离线解密）。先「探测」列出可导入的域名，再勾选要导入的项。',
 		loginImportSource: '来源',
-		loginImportDomains: '域名（逗号分隔，留空 = 全部）',
-		loginImportDomainsHint: '例如 bilibili.com, zhihu.com — 含子域名。建议明确列出，不要全量导入。',
+		loginImportProfile: 'Profile',
+		loginImportDomains: '探测范围：域名（逗号分隔，留空 = 全部）',
+		loginImportDomainsHint: '例如 bilibili.com, zhihu.com — 含子域名。探测后列出找到的域名，勾选要导入的项。',
+		loginImportSelectAll: '全选',
+		loginImportNoDomains: '没有找到匹配的 cookie。',
+		loginImportSourcesFailed: '无法列出系统浏览器，已退回 auto：',
 		loginImportCloseSource: '源浏览器运行中则先优雅关闭（窗口下次启动可恢复）',
 		loginImportProbe: '探测',
 		loginImportRun: '导入',
@@ -590,31 +598,92 @@ declare function require(id: string): any
 			)
 		}
 
+		/**
+		 * 勾选列表的子域名覆盖：与服务端 `cookieMatchesDomains` 同一规则（去掉前导点，
+		 * 相等或以 `.d` 结尾即匹配），所以勾选 `.a.com` 会顺带导入 `x.a.com`。
+		 * 返回覆盖 `domain` 的另一个已勾选项，没有则返回 null。
+		 */
+		function loginDomainCoveredBy(domain, checked) {
+			var host = String(domain || '').replace(/^\./, '').toLowerCase()
+			for (var i = 0; i < checked.length; i++) {
+				if (checked[i] === domain) continue
+				var d = String(checked[i] || '').replace(/^\./, '').trim().toLowerCase()
+				if (d !== '' && (host === d || host.slice(-(d.length + 1)) === '.' + d)) return checked[i]
+			}
+			return null
+		}
+
 		function LoginImportBlock(props) {
 			var t = props.t
 			var useState = React.useState
+			var useEffect = React.useEffect
+			var _sources = useState([]), sources = _sources[0], setSources = _sources[1]
+			var _srcErr = useState(null), sourcesError = _srcErr[0], setSourcesError = _srcErr[1]
 			var _source = useState('auto'), source = _source[0], setSource = _source[1]
+			var _profile = useState(''), profile = _profile[0], setProfile = _profile[1]
 			var _domains = useState(''), domains = _domains[0], setDomains = _domains[1]
 			var _close = useState(false), closeSource = _close[0], setCloseSource = _close[1]
 			var _run = useState(false), running = _run[0], setRunning = _run[1]
 			var _res = useState(null), result = _res[0], setResult = _res[1]
+			// 最近一次成功探测的结果；勾选只在它上面进行，换来源 / profile / 范围后作废。
+			var _probe = useState(null), probe = _probe[0], setProbe = _probe[1]
+			var _checked = useState([]), checked = _checked[0], setChecked = _checked[1]
+
+			useEffect(function () {
+				var alive = true
+				fetch('/api/ego/login-import/sources')
+					.then(function (r) { return r.json().catch(function () { return null }) })
+					.then(function (j) {
+						if (!alive) return
+						if (j && j.ok === true && Array.isArray(j.sources)) {
+							setSources(j.sources)
+							if (j.sources.length === 0) setSourcesError('no system Chromium browser found')
+						} else setSourcesError((j && j.error) || 'no response')
+					})
+					.catch(function (e) { if (alive) setSourcesError(String(e)) })
+				return function () { alive = false }
+			}, [])
+
+			// `auto` 与服务端一致：取检测顺序中的第一个浏览器。
+			var current = source === 'auto' ? sources[0] : sources.filter(function (s) { return s.id === source })[0]
+			var profiles = (current && current.profiles) || []
+			var profileDir = profiles.some(function (p) { return p.dirName === profile }) ? profile : (profiles[0] ? profiles[0].dirName : '')
+
+			function resetProbe() { setProbe(null); setChecked([]); setResult(null) }
 			function run(dryRun) {
 				setRunning(true)
 				setResult(null)
+				var body = {
+					source: source,
+					domains: dryRun ? domains.split(',').map(function (s) { return s.trim() }).filter(Boolean) : checked,
+					closeSource: closeSource,
+					dryRun: dryRun,
+					// 空 = sources 不可用（只剩 auto）：不带 profile，JSON.stringify 会丢掉 undefined。
+					profile: profileDir || undefined,
+				}
 				fetch('/api/ego/login-import', {
 					method: 'POST',
 					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify({
-						source: source,
-						domains: domains.split(',').map(function (s) { return s.trim() }).filter(Boolean),
-						closeSource: closeSource,
-						dryRun: dryRun,
-					}),
+					body: JSON.stringify(body),
 				})
 					.then(function (r) { return r.json().catch(function () { return null }) })
-					.then(function (j) { setRunning(false); setResult(j || { ok: false, error: 'no response' }) })
+					.then(function (j) {
+						setRunning(false)
+						var res = j || { ok: false, error: 'no response' }
+						setResult(res)
+						if (dryRun && res.ok === true) { setProbe(res); setChecked([]) }
+					})
 					.catch(function (e) { setRunning(false); setResult({ ok: false, error: String(e) }) })
 			}
+			function toggle(domain, on) {
+				setChecked(function (prev) {
+					var rest = prev.filter(function (d) { return d !== domain })
+					return on ? rest.concat([domain]) : rest
+				})
+			}
+			var probeDomains = (probe && Array.isArray(probe.domains)) ? probe.domains : []
+			var allChecked = probeDomains.length > 0 && probeDomains.every(function (d) { return checked.indexOf(d.domain) !== -1 })
+
 			var resultText = null
 			var resultOk = false
 			if (result) {
@@ -635,28 +704,57 @@ declare function require(id: string): any
 					resultText = result.error || 'failed'
 				}
 			}
+			var rowStyle = { display: 'flex', gap: '6px', alignItems: 'center', cursor: 'pointer' }
 			return h('div', { className: 'dsh-ego-card__ffmpeg' },
 				h('div', { className: 'dsh-ego-card__ffmpeg-title' }, t('loginImportTitle')),
 				h('div', { className: 'dsh-ego-card__hint' }, t('loginImportIntro')),
 				h('div', { className: 'dsh-ego-card__field-row' },
 					h('select', {
 						className: 'dsh-ego-card__input dsh-ego-card__input--narrow', value: source, disabled: running,
-						onChange: function (e) { setSource(e.target.value) },
-					}, ['auto', 'chrome', 'edge', 'brave'].map(function (v) { return h('option', { key: v, value: v }, v === 'auto' ? t('loginImportSource') + ': auto' : v) })),
+						'aria-label': t('loginImportSource'),
+						onChange: function (e) { setSource(e.target.value); setProfile(''); resetProbe() },
+					}, [{ id: 'auto', label: t('loginImportSource') + ': auto' }].concat(sources).map(function (s) { return h('option', { key: s.id, value: s.id }, s.label) })),
+					profiles.length > 0 ? h('select', {
+						className: 'dsh-ego-card__input dsh-ego-card__input--narrow', value: profileDir, disabled: running,
+						'aria-label': t('loginImportProfile'),
+						onChange: function (e) { setProfile(e.target.value); resetProbe() },
+					}, profiles.map(function (p) { return h('option', { key: p.dirName, value: p.dirName }, p.name === p.dirName ? p.name : p.name + ' (' + p.dirName + ')') })) : null,
 					h('input', {
 						className: 'dsh-ego-card__input', type: 'text', value: domains, disabled: running,
 						placeholder: t('loginImportDomains'),
-						onChange: function (e) { setDomains(e.target.value) },
+						onChange: function (e) { setDomains(e.target.value); resetProbe() },
 					}),
 				),
+				sourcesError ? h('div', { className: 'dsh-ego-card__failed', role: 'status' }, t('loginImportSourcesFailed') + sourcesError) : null,
 				h('div', { className: 'dsh-ego-card__hint' }, t('loginImportDomainsHint')),
-				h('label', { className: 'dsh-ego-card__hint', style: { display: 'flex', gap: '6px', alignItems: 'center', cursor: 'pointer' } },
+				h('label', { className: 'dsh-ego-card__hint', style: rowStyle },
 					h('input', { type: 'checkbox', checked: closeSource, disabled: running, onChange: function (e) { setCloseSource(e.target.checked) } }),
 					t('loginImportCloseSource'),
 				),
+				probe ? (probeDomains.length === 0
+					? h('div', { className: 'dsh-ego-card__hint' }, t('loginImportNoDomains'))
+					: h('div', { className: 'dsh-ego-card__login-domains' },
+						h('label', { className: 'dsh-ego-card__hint', style: rowStyle },
+							h('input', {
+								type: 'checkbox', checked: allChecked, disabled: running,
+								onChange: function (e) { setChecked(e.target.checked ? probeDomains.map(function (d) { return d.domain }) : []) },
+							}),
+							t('loginImportSelectAll'),
+						),
+						probeDomains.map(function (d) {
+							var by = loginDomainCoveredBy(d.domain, checked)
+							return h('label', { key: d.domain, className: 'dsh-ego-card__hint', style: rowStyle, title: by ? '⊂ ' + by : undefined },
+								h('input', {
+									type: 'checkbox', checked: by !== null || checked.indexOf(d.domain) !== -1, disabled: running || by !== null,
+									onChange: function (e) { toggle(d.domain, e.target.checked) },
+								}),
+								d.domain + ' · ' + String(d.cookies),
+							)
+						}),
+					)) : null,
 				h('div', { className: 'dsh-ego-card__ffmpeg-actions' },
 					h('button', { type: 'button', className: 'dsh-ego-card__btn', disabled: running, onClick: function () { run(true) } }, t('loginImportProbe')),
-					h('button', { type: 'button', className: 'dsh-ego-card__btn dsh-ego-card__btn--primary', disabled: running, onClick: function () { run(false) } }, t('loginImportRun')),
+					h('button', { type: 'button', className: 'dsh-ego-card__btn dsh-ego-card__btn--primary', disabled: running || !probe || checked.length === 0, onClick: function () { run(false) } }, t('loginImportRun')),
 				),
 				running ? h('div', { className: 'dsh-ego-card__ffmpeg-status', role: 'status' }, t('loginImportBusy')) : null,
 				resultText ? h('div', { className: resultOk ? 'dsh-ego-card__saved' : 'dsh-ego-card__failed', role: 'status' }, resultText) : null,
@@ -960,7 +1058,7 @@ declare function require(id: string): any
 
 			return h('div', { className: 'dsh-ego-card__body' },
 				!writable ? h('p', { className: 'dsh-ego-card__notice', role: 'status' }, t('readOnly')) : null,
-				h('div', { className: 'dsh-ego-card__form' }, fields),
+				h('div', { className: 'dsh-ego-card__form' }, fields, h(LoginImportBlock, { t: t })),
 				h('div', { className: 'dsh-ego-card__footer' },
 					status ? h('p', { className: 'dsh-ego-card__hint', role: 'status' }, status) : null,
 					h('div', { className: 'dsh-ego-card__actions' },
